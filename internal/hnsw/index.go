@@ -11,7 +11,7 @@ import (
 type Node struct {
 	ID        uint32
 	Vector    []float32
-	Level     int        // 出现在 0..Level
+	Level     int        // present on layers 0..Level
 	Neighbors [][]uint32 // Neighbors[layer] = neighbor node IDs at that layer
 	Deleted   bool
 }
