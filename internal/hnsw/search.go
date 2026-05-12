@@ -70,3 +70,40 @@ func (idx *Index) searchLayer(query []float32, entryPoints []uint32, ef, layer i
 	sort.Slice(out, func(i, j int) bool { return out[i].Dist < out[j].Dist })
 	return out
 }
+
+// Search is the top-level KNN query.
+// k: k: number of nearest neighbors to return
+// efSearch: efSearch: candidate set size at query time (runtime tunable)
+func (idx *Index) Search(query []float32, k, efSearch int) []Candidate {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	if !idx.hasEntry {
+		return nil
+	}
+
+	entryPoints := []uint32{idx.entryPoint}
+	// Greedy descent from maxLevel down to 1
+	for l := idx.maxLevel; l > 0; l-- {
+		res := idx.searchLayer(query, entryPoints, 1, l)
+		if len(res) > 0 {
+			entryPoints = []uint32{res[0].ID}
+		}
+	}
+
+	// Layer 0 with efSearch
+	candidates := idx.searchLayer(query, entryPoints, efSearch, 0)
+
+	// Filter tombstones (Day 11 starts using Deleted; this is a no-op until then)
+	out := make([]Candidate, 0, k)
+	for _, c := range candidates {
+		if idx.nodes[c.ID].Deleted {
+			continue
+		}
+		out = append(out, c)
+		if len(out) == k {
+			break
+		}
+	}
+	return out
+}
