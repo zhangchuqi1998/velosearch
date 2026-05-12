@@ -86,7 +86,7 @@ func TestLoadFvecs_Synthetic(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f.Close()
+	_ = f.Close()
 
 	got, err := LoadFvecs(path)
 	if err != nil {
@@ -128,7 +128,7 @@ func TestLoadIvecs_Synthetic(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f.Close()
+	_ = f.Close()
 
 	got, err := LoadIvecs(path)
 	if err != nil {

@@ -6,63 +6,76 @@ import (
 )
 
 // searchLayer runs an ef-bounded greedy search at a single layer.
+// Safe to call concurrently from multiple goroutines; per-Node RLocks
+// guard reads of Neighbors against concurrent Insert mutations.
 //
 // query: the query vector
 // entryPoints: starting node IDs at this layer
-// ef: candidate set capacity (== 1 for greedy descent, efSearch/efConstruction otherwise)
+// ef: candidate set capacity (1 for greedy descent, larger for layer 0)
 // layer: which layer to search
 //
 // Returns results sorted ascending by Dist.
 func (idx *Index) searchLayer(query []float32, entryPoints []uint32, ef, layer int) []Candidate {
-	visited := make(map[uint32]bool, ef*2)
+	visited := getBitset()
+	defer putBitset(visited)
 	candidates := &MinHeap{}
 	results := &MaxHeap{}
 	dist := idx.Distance
 
-	// Init: push every entry point into both candidates and results
 	for _, ep := range entryPoints {
-		d := dist(query, idx.nodes[ep].Vector)
-		visited[ep] = true
+		epNode := idx.getNode(ep)
+		if epNode == nil {
+			continue
+		}
+		// epNode.Vector is immutable after Insert returns; no lock needed.
+		d := dist(query, epNode.Vector)
+		visited.Set(ep)
 		heap.Push(candidates, Candidate{ep, d})
 		heap.Push(results, Candidate{ep, d})
 	}
 
 	for candidates.Len() > 0 {
-		// 1. Pop closest unexpanded node c from candidates
 		closest := heap.Pop(candidates).(Candidate)
-
-		// 2. If c.Dist > furthest in results AND len(results) == ef, break
 		if results.Len() == ef && closest.Dist > results.Peek().Dist {
 			break
 		}
 
-		// 3. For each unvisited neighbor of c at this layer:
-		node := idx.nodes[closest.ID]
-		if layer >= len(node.Neighbors) {
-			// node does not exist on this layer; skip
+		cn := idx.getNode(closest.ID)
+		if cn == nil {
 			continue
 		}
-		for _, nbrID := range node.Neighbors[layer] {
-			if visited[nbrID] {
+
+		// Hold the RLock for the inner loop. Distance is fast (SIMD), so the
+		// critical section is short; in exchange we don't pay the cost of
+		// copying the neighbors slice on every expansion.
+		cn.mu.RLock()
+		if layer >= len(cn.Neighbors) {
+			cn.mu.RUnlock()
+			continue
+		}
+		for _, nbrID := range cn.Neighbors[layer] {
+			if visited.Test(nbrID) {
 				continue
 			}
-			visited[nbrID] = true
+			visited.Set(nbrID)
 
-			d := dist(query, idx.nodes[nbrID].Vector)
+			nbr := idx.getNode(nbrID)
+			if nbr == nil {
+				continue
+			}
+			d := dist(query, nbr.Vector)
 
-			// 3c. push if closer than furthest result OR results not full
 			if results.Len() < ef || d < results.Peek().Dist {
 				heap.Push(candidates, Candidate{nbrID, d})
 				heap.Push(results, Candidate{nbrID, d})
-				// 3d. if len(results) > ef -> evict furthest
 				if results.Len() > ef {
 					heap.Pop(results)
 				}
 			}
 		}
+		cn.mu.RUnlock()
 	}
 
-	// Return results sorted ascending by Dist
 	out := make([]Candidate, results.Len())
 	for i := len(out) - 1; i >= 0; i-- {
 		out[i] = heap.Pop(results).(Candidate)
@@ -71,33 +84,38 @@ func (idx *Index) searchLayer(query []float32, entryPoints []uint32, ef, layer i
 	return out
 }
 
-// Search is the top-level KNN query.
-// k: k: number of nearest neighbors to return
-// efSearch: efSearch: candidate set size at query time (runtime tunable)
+// Search is the top-level KNN query. Safe to call concurrently.
 func (idx *Index) Search(query []float32, k, efSearch int) []Candidate {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
+	idx.globalMu.Lock()
+	hasEntry := idx.hasEntry
+	entryPoint := idx.entryPoint
+	maxLevel := idx.maxLevel
+	idx.globalMu.Unlock()
 
-	if !idx.hasEntry {
+	if !hasEntry {
 		return nil
 	}
 
-	entryPoints := []uint32{idx.entryPoint}
-	// Greedy descent from maxLevel down to 1
-	for l := idx.maxLevel; l > 0; l-- {
+	entryPoints := []uint32{entryPoint}
+	for l := maxLevel; l > 0; l-- {
 		res := idx.searchLayer(query, entryPoints, 1, l)
 		if len(res) > 0 {
 			entryPoints = []uint32{res[0].ID}
 		}
 	}
 
-	// Layer 0 with efSearch
 	candidates := idx.searchLayer(query, entryPoints, efSearch, 0)
 
-	// Filter tombstones (Day 11 starts using Deleted; this is a no-op until then)
 	out := make([]Candidate, 0, k)
 	for _, c := range candidates {
-		if idx.nodes[c.ID].Deleted {
+		n := idx.getNode(c.ID)
+		if n == nil {
+			continue
+		}
+		n.mu.RLock()
+		deleted := n.Deleted
+		n.mu.RUnlock()
+		if deleted {
 			continue
 		}
 		out = append(out, c)

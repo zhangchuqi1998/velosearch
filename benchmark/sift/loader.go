@@ -33,7 +33,7 @@ func LoadFvecs(path string) ([][]float32, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	br := bufio.NewReaderSize(f, 1<<20) // 1 MB buffer
 
@@ -74,7 +74,7 @@ func LoadIvecs(path string) ([][]int32, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	br := bufio.NewReaderSize(f, 1<<20)
 

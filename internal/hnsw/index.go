@@ -9,29 +9,34 @@ import (
 )
 
 type Node struct {
-	ID        uint32
-	Vector    []float32
-	Level     int        // present on layers 0..Level
-	Neighbors [][]uint32 // Neighbors[layer] = neighbor node IDs at that layer
-	Deleted   bool
+	ID    uint32
+	Vector []float32 // immutable after Insert returns; safe to read without lock
+	Level int        // immutable after Insert returns
+
+	mu        sync.RWMutex // protects Neighbors and Deleted
+	Neighbors [][]uint32   // Neighbors[layer] = neighbor IDs at that layer
+	Deleted   bool         // tombstone marker (Day 11)
 }
 
 type Index struct {
 	Dim            int
-	M              int     // typical 16
-	MaxM           int     // = M (for layers > 0)
-	MaxM0          int     // = 2*M (for layer 0)
-	EfConstruction int     // typical 200
-	ML             float64 // 1.0 / ln(M)
+	M              int
+	MaxM           int
+	MaxM0          int
+	EfConstruction int
+	ML             float64
 	Distance       distance.DistanceFunc
 
-	mu         sync.RWMutex
-	nodes      map[uint32]*Node
+	nodesMu sync.RWMutex
+	nodes   map[uint32]*Node
+
+	globalMu   sync.Mutex
 	entryPoint uint32
 	maxLevel   int
 	hasEntry   bool
 
-	rng *rand.Rand
+	rngMu sync.Mutex
+	rng   *rand.Rand
 }
 
 func NewIndex(dim, M, efConstruction int, dist distance.DistanceFunc) *Index {
@@ -48,9 +53,21 @@ func NewIndex(dim, M, efConstruction int, dist distance.DistanceFunc) *Index {
 	}
 }
 
-// randomLevel geometric distribution for layer selection. Layer 0 takes ~93.75% (M=16),
-// layer k probability ≈ 1/M^k.
+// getNode looks up a node by ID under a read lock on the nodes map.
+// Returns nil if the node is missing. Holding the returned pointer is safe;
+// the Index only adds to nodes (never deletes), so the pointer remains
+// valid for the lifetime of the Index.
+func (idx *Index) getNode(id uint32) *Node {
+	idx.nodesMu.RLock()
+	n := idx.nodes[id]
+	idx.nodesMu.RUnlock()
+	return n
+}
+
+// randomLevel geometric distribution for layer selection. Goroutine-safe.
 func (idx *Index) randomLevel() int {
+	idx.rngMu.Lock()
 	r := idx.rng.Float64()
+	idx.rngMu.Unlock()
 	return int(math.Floor(-math.Log(r) * idx.ML))
 }
