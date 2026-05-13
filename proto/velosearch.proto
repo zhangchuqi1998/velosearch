@@ -1,0 +1,113 @@
+// VeloSearch gRPC API.
+//
+// Service surface:
+//   - Collection lifecycle:  CreateCollection / DropCollection / ListCollections
+//   - Mutations:              Insert / Delete
+//   - Queries:                Search / Stats
+//
+// Collections are multi-tenant: each has its own HNSW index, dimension,
+// and distance metric. All RPCs are unary; streaming is out of scope for
+// v0.1.
+syntax = "proto3";
+
+package velosearch.v1;
+option go_package = "github.com/zhangchuqi1998/velosearch/proto;velosearchv1";
+
+service VectorSearch {
+  // ---- Collection lifecycle ----
+  rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
+  rpc DropCollection(DropCollectionRequest)     returns (DropCollectionResponse);
+  rpc ListCollections(ListCollectionsRequest)   returns (ListCollectionsResponse);
+
+  // ---- Mutations ----
+  rpc Insert(InsertRequest) returns (InsertResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // ---- Queries ----
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Stats(StatsRequest)   returns (StatsResponse);
+}
+
+// Metric selects the distance function used by the collection's index.
+// Set at CreateCollection and immutable thereafter.
+enum Metric {
+  METRIC_UNSPECIFIED = 0;
+  METRIC_L2          = 1;
+  METRIC_COSINE      = 2;
+}
+
+// Vector carries a single dense float32 vector.
+message Vector {
+  repeated float values = 1;
+}
+
+// ---- Collection lifecycle messages ----
+
+message CreateCollectionRequest {
+  string name            = 1;
+  int32  dim             = 2;
+  Metric metric          = 3;
+  int32  m               = 4; // HNSW M, typical 16
+  int32  ef_construction = 5; // HNSW efConstruction, typical 200
+}
+message CreateCollectionResponse {
+  bool created = 1;
+}
+
+message DropCollectionRequest  { string name = 1; }
+message DropCollectionResponse { bool dropped = 1; }
+
+message ListCollectionsRequest {}
+message ListCollectionsResponse {
+  repeated string names = 1;
+}
+
+// ---- Mutation messages ----
+
+message Item {
+  uint32 id     = 1;
+  Vector vector = 2;
+}
+
+message InsertRequest {
+  string        collection = 1;
+  repeated Item items      = 2;
+}
+message InsertResponse {
+  int32 inserted = 1;
+}
+
+message DeleteRequest {
+  string          collection = 1;
+  repeated uint32 ids        = 2;
+}
+message DeleteResponse {
+  int32 deleted = 1;
+}
+
+// ---- Query messages ----
+
+message SearchRequest {
+  string collection = 1;
+  Vector query      = 2;
+  int32  k          = 3; // number of neighbors to return
+  int32  ef_search  = 4; // HNSW candidate set size at query time
+}
+
+message Hit {
+  uint32 id       = 1;
+  float  distance = 2;
+}
+message SearchResponse {
+  repeated Hit hits = 1;
+}
+
+message StatsRequest {
+  string collection = 1;
+}
+message StatsResponse {
+  int32 num_vectors = 1;
+  int32 num_deleted = 2;
+  int32 num_layers  = 3;
+  int64 mem_bytes   = 4;
+}
