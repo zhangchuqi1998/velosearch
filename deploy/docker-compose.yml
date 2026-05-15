@@ -1,0 +1,48 @@
+# Single-command demo stack: velosearch + prometheus + grafana.
+#
+#   cd deploy && docker compose up -d
+#   open http://localhost:3000   (grafana, anonymous Admin login)
+#   open http://localhost:9091   (prometheus query UI)
+#
+# Bind-mounts a named volume for WAL persistence; data survives `docker
+# compose down` but is wiped by `docker compose down -v`.
+
+services:
+  velosearch:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: velosearch:dev
+    ports:
+      - "50051:50051" # gRPC
+      - "9090:9090"   # Prometheus /metrics
+    volumes:
+      - velosearch-data:/data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - velosearch
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      # Anonymous Admin is fine for a local demo. Do NOT use these flags
+      # on anything exposed to a public network.
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  velosearch-data:

@@ -28,5 +28,9 @@ testdata/crash_*
 
 # Local dev
 *.log
+*.elapsed
 .env
 .env.local
+
+# Local tooling configuration (Claude Code permissions, etc.)
+.claude/

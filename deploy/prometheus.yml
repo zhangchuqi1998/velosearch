@@ -1,0 +1,11 @@
+# Scrape every 5s — chosen so that grafana panels feel responsive during
+# a demo (3s+ refresh feels laggy), without overwhelming the server.
+# In production this would be 15-60s depending on cardinality budget.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: velosearch
+    static_configs:
+      - targets: ['velosearch:9090']

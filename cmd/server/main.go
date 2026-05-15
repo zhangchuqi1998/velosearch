@@ -5,11 +5,13 @@ import (
 	"flag"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 
 	"github.com/zhangchuqi1998/velosearch/internal/collection"
@@ -20,6 +22,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":50051", "gRPC listen address")
+	metricsAddr := flag.String("metrics-addr", ":9090", "HTTP listen address for Prometheus /metrics (empty disables)")
 	dataDir := flag.String("data-dir", "./data", "WAL data directory")
 	walEnabled := flag.Bool("wal", true, "enable write-ahead log (disable for benchmarks)")
 	flag.Parse()
@@ -69,6 +72,25 @@ func main() {
 
 	grpcSrv := grpc.NewServer()
 	pb.RegisterVectorSearchServer(grpcSrv, srv)
+
+	// Prometheus /metrics on a separate port so scrapers don't compete with
+	// gRPC traffic. Use a dedicated ServeMux so we don't pollute the global
+	// http.DefaultServeMux (which third-party libs sometimes register on).
+	if *metricsAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		})
+		metricsSrv := &http.Server{Addr: *metricsAddr, Handler: mux}
+		go func() {
+			slog.Info("metrics listening", "addr", *metricsAddr)
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("metrics serve failed", "err", err)
+			}
+		}()
+	}
 
 	go func() {
 		slog.Info("server listening", "addr", *addr)

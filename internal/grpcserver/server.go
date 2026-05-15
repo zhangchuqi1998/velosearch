@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -134,6 +135,8 @@ func (s *Server) Insert(ctx context.Context, req *pb.InsertRequest) (*pb.InsertR
 		}
 		col.Index.Insert(item.Id, item.Vector.Values)
 	}
+	InsertCounter.WithLabelValues(req.Collection).Add(float64(len(req.Items)))
+	CollectionSize.WithLabelValues(req.Collection).Set(float64(col.Index.SnapshotStats().NumVectors))
 	slog.Info("Insert", "collection", req.Collection, "count", len(req.Items))
 	return &pb.InsertResponse{Inserted: int32(len(req.Items))}, nil
 }
@@ -158,11 +161,15 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteR
 			deleted++
 		}
 	}
+	DeleteCounter.WithLabelValues(req.Collection).Add(float64(deleted))
 	slog.Info("Delete", "collection", req.Collection, "requested", len(req.Ids), "deleted", deleted)
 	return &pb.DeleteResponse{Deleted: int32(deleted)}, nil
 }
 
 func (s *Server) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
+	timer := prometheus.NewTimer(SearchLatency.WithLabelValues(req.Collection))
+	defer timer.ObserveDuration()
+
 	if req.Collection == "" {
 		return nil, status.Error(codes.InvalidArgument, "collection is required")
 	}
