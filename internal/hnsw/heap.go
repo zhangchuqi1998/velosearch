@@ -82,3 +82,122 @@ func (h *MaxHeap) Pop() any {
 func (h MaxHeap) Peek() Candidate {
 	return h[0]
 }
+
+// --- Typed direct push/pop --------------------------------------------------
+//
+// container/heap.Push/Pop go through the heap.Interface — each call boxes a
+// Candidate into an `any`, calls our Push/Pop methods, plus walks the heap
+// via Less/Swap/Len through indirect method dispatch. That's a few interface
+// calls and one allocation per heap operation, which adds up to thousands of
+// allocations per Search at ef=200.
+//
+// The direct functions below operate on concrete *MinHeap / *MaxHeap, inline
+// the sift, and inline the Dist comparison. No boxing, no interface dispatch.
+// Behaviour is identical to container/heap's Push/Pop on the corresponding
+// heap.Interface, just specialised for Candidate.
+
+func minPush(h *MinHeap, c Candidate) {
+	*h = append(*h, c)
+	a := *h
+	j := len(a) - 1
+	for {
+		i := (j - 1) / 2
+		if i == j || a[j].Dist >= a[i].Dist {
+			break
+		}
+		a[i], a[j] = a[j], a[i]
+		j = i
+	}
+}
+
+func minPop(h *MinHeap) Candidate {
+	a := *h
+	n := len(a) - 1
+	a[0], a[n] = a[n], a[0]
+	// sift down on a[:n]
+	i := 0
+	for {
+		l := 2*i + 1
+		if l >= n {
+			break
+		}
+		j := l
+		if r := l + 1; r < n && a[r].Dist < a[l].Dist {
+			j = r
+		}
+		if a[i].Dist <= a[j].Dist {
+			break
+		}
+		a[i], a[j] = a[j], a[i]
+		i = j
+	}
+	c := a[n]
+	a[n] = Candidate{} // GC-safe even if Candidate grows pointer fields later
+	*h = a[:n]
+	return c
+}
+
+func maxPush(h *MaxHeap, c Candidate) {
+	*h = append(*h, c)
+	a := *h
+	j := len(a) - 1
+	for {
+		i := (j - 1) / 2
+		if i == j || a[j].Dist <= a[i].Dist {
+			break
+		}
+		a[i], a[j] = a[j], a[i]
+		j = i
+	}
+}
+
+// maxReplaceTop swaps in c as the new root and sifts down. Equivalent to
+// (maxPop + maxPush) when the caller already knows c.Dist < currentRoot.Dist
+// — saves one full sift pass. Requires len(h) >= 1.
+func maxReplaceTop(h *MaxHeap, c Candidate) {
+	a := *h
+	a[0] = c
+	n := len(a)
+	i := 0
+	for {
+		l := 2*i + 1
+		if l >= n {
+			break
+		}
+		j := l
+		if r := l + 1; r < n && a[r].Dist > a[l].Dist {
+			j = r
+		}
+		if a[i].Dist >= a[j].Dist {
+			break
+		}
+		a[i], a[j] = a[j], a[i]
+		i = j
+	}
+}
+
+func maxPop(h *MaxHeap) Candidate {
+	a := *h
+	n := len(a) - 1
+	a[0], a[n] = a[n], a[0]
+	i := 0
+	for {
+		l := 2*i + 1
+		if l >= n {
+			break
+		}
+		j := l
+		if r := l + 1; r < n && a[r].Dist > a[l].Dist {
+			j = r
+		}
+		if a[i].Dist >= a[j].Dist {
+			break
+		}
+		a[i], a[j] = a[j], a[i]
+		i = j
+	}
+	c := a[n]
+	a[n] = Candidate{}
+	*h = a[:n]
+	return c
+}

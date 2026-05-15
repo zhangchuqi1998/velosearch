@@ -15,16 +15,40 @@ option go_package = "github.com/zhangchuqi1998/velosearch/proto;velosearchv1";
 
 service VectorSearch {
   // ---- Collection lifecycle ----
+
+  // CreateCollection allocates a new HNSW index. Name must be unique;
+  // duplicate names return AlreadyExists.
   rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
+
+  // DropCollection removes the entire index. Idempotent on replay: a
+  // missing collection returns NotFound on the wire but is silently
+  // skipped during WAL recovery.
   rpc DropCollection(DropCollectionRequest)     returns (DropCollectionResponse);
+
+  // ListCollections enumerates current collection names. Order undefined.
   rpc ListCollections(ListCollectionsRequest)   returns (ListCollectionsResponse);
 
   // ---- Mutations ----
+
+  // Insert adds items to a collection. The server does not deduplicate by
+  // ID; inserting the same ID twice produces two graph nodes (avoid this).
+  // Each item is durably written to the WAL before the in-memory index is
+  // updated, so an acknowledged Insert survives SIGKILL.
   rpc Insert(InsertRequest) returns (InsertResponse);
+
+  // Delete marks items as tombstones. The HNSW graph edges are preserved
+  // (tombstones may serve as transit nodes during search), but Search
+  // filters them out of returned hits. A hard rebuild reclaims the space.
   rpc Delete(DeleteRequest) returns (DeleteResponse);
 
   // ---- Queries ----
+
+  // Search returns the k nearest non-deleted vectors. Increasing
+  // ef_search trades latency for recall: ef_search must be >= k.
   rpc Search(SearchRequest) returns (SearchResponse);
+
+  // Stats returns an O(N) snapshot of the collection. Cheap relative to
+  // Search but not free — don't call it inside a tight loop.
   rpc Stats(StatsRequest)   returns (StatsResponse);
 }
 
@@ -32,11 +56,13 @@ service VectorSearch {
 // Set at CreateCollection and immutable thereafter.
 enum Metric {
   METRIC_UNSPECIFIED = 0;
-  METRIC_L2          = 1;
-  METRIC_COSINE      = 2;
+  METRIC_L2          = 1; // squared L2 distance, lower is closer
+  METRIC_COSINE      = 2; // 1 - cosine similarity, in [0, 2]
 }
 
-// Vector carries a single dense float32 vector.
+// Vector carries a single dense float32 vector. The length must equal
+// the collection's dim (set at CreateCollection); mismatches return
+// InvalidArgument.
 message Vector {
   repeated float values = 1;
 }
@@ -45,10 +71,10 @@ message Vector {
 
 message CreateCollectionRequest {
   string name            = 1;
-  int32  dim             = 2;
+  int32  dim             = 2; // vector dimension; > 0, fixed for the collection
   Metric metric          = 3;
-  int32  m               = 4; // HNSW M, typical 16
-  int32  ef_construction = 5; // HNSW efConstruction, typical 200
+  int32  m               = 4; // HNSW M (graph degree budget). Typical 16; must be >= 4.
+  int32  ef_construction = 5; // HNSW efConstruction (build-time candidate set). Typical 200; must be >= m.
 }
 message CreateCollectionResponse {
   bool created = 1;
@@ -64,6 +90,8 @@ message ListCollectionsResponse {
 
 // ---- Mutation messages ----
 
+// Item is a single (id, vector) pair. IDs are client-assigned uint32s
+// and must be unique within a collection; the server does not check.
 message Item {
   uint32 id     = 1;
   Vector vector = 2;
@@ -74,7 +102,7 @@ message InsertRequest {
   repeated Item items      = 2;
 }
 message InsertResponse {
-  int32 inserted = 1;
+  int32 inserted = 1; // count of items successfully accepted
 }
 
 message DeleteRequest {
@@ -82,7 +110,7 @@ message DeleteRequest {
   repeated uint32 ids        = 2;
 }
 message DeleteResponse {
-  int32 deleted = 1;
+  int32 deleted = 1; // count of IDs that existed and were tombstoned; missing IDs are skipped silently
 }
 
 // ---- Query messages ----
@@ -90,24 +118,24 @@ message DeleteResponse {
 message SearchRequest {
   string collection = 1;
   Vector query      = 2;
-  int32  k          = 3; // number of neighbors to return
-  int32  ef_search  = 4; // HNSW candidate set size at query time
+  int32  k          = 3; // number of neighbors to return; > 0
+  int32  ef_search  = 4; // HNSW candidate set size at query time; must be >= k. Typical 50–400.
 }
 
 message Hit {
   uint32 id       = 1;
-  float  distance = 2;
+  float  distance = 2; // raw metric value (e.g. squared L2), lower is closer
 }
 message SearchResponse {
-  repeated Hit hits = 1;
+  repeated Hit hits = 1; // ordered ascending by distance; may be shorter than k if the collection is small
 }
 
 message StatsRequest {
   string collection = 1;
 }
 message StatsResponse {
-  int32 num_vectors = 1;
-  int32 num_deleted = 2;
-  int32 num_layers  = 3;
-  int64 mem_bytes   = 4;
+  int32 num_vectors = 1; // total nodes, including tombstones
+  int32 num_deleted = 2; // tombstone count
+  int32 num_layers  = 3; // maxLevel + 1
+  int64 mem_bytes   = 4; // rough estimate: num_vectors * dim * 4 (vector storage only)
 }

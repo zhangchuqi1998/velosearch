@@ -1,0 +1,42 @@
+.git
+.github
+.claude
+.idea
+.vscode
+
+# build artifacts
+bin
+*.exe
+*.test
+*.prof
+*.pprof
+cpu.prof
+cpu2.prof
+
+# benchmark datasets and logs (huge, never needed in image)
+benchmark/sift/data
+benchmark/gist/data
+*_build.log
+*_run.log
+*_run.elapsed
+sift_run*.log
+sift_run*.elapsed
+gist_run*.log
+gist_run*.elapsed
+faiss_run*.log
+faiss_run*.elapsed
+bench_run.log
+
+# local data directories
+data
+testdata
+
+# docs (not needed at runtime)
+docs
+
+# external repo sibling
+ann-benchmarks
+
+# notes / markdown
+*.md
+LICENSE

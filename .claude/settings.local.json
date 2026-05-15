@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C F:/app/job/velosearch log --oneline -20)",
+      "Bash(git -C F:/app/job/velosearch status --short)",
+      "Bash(go test *)",
+      "Bash(go build *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Set-ExecutionPolicy *)",
+      "PowerShell(scoop install *)",
+      "PowerShell(gcc *)",
+      "PowerShell(go test *)",
+      "PowerShell(scoop search *)",
+      "PowerShell(scoop *)",
+      "PowerShell(go test *、)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(python -c \"import grpc_tools.protoc; import psutil; import numpy; print\\('grpcio_tools', grpc_tools.__file__\\); print\\('psutil OK'\\); print\\('numpy', numpy.__version__\\)\")",
+      "Bash(docker build *)",
+      "Bash(git add *)"
+    ]
+  }
+}

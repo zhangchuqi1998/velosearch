@@ -1,7 +1,6 @@
 package hnsw
 
 import (
-	"container/heap"
 	"sort"
 )
 
@@ -18,8 +17,13 @@ import (
 func (idx *Index) searchLayer(query []float32, entryPoints []uint32, ef, layer int) []Candidate {
 	visited := getBitset()
 	defer putBitset(visited)
-	candidates := &MinHeap{}
-	results := &MaxHeap{}
+	// Pre-size both heaps to ef so append never reallocs inside the hot loop.
+	// candidates can grow past ef (it holds the frontier, not capped),
+	// but ef is a good starting cap to avoid the 0→8→16→…→ef chain of grows.
+	cBuf := make(MinHeap, 0, ef)
+	rBuf := make(MaxHeap, 0, ef+1)
+	candidates := &cBuf
+	results := &rBuf
 	dist := idx.Distance
 
 	for _, ep := range entryPoints {
@@ -30,12 +34,12 @@ func (idx *Index) searchLayer(query []float32, entryPoints []uint32, ef, layer i
 		// epNode.Vector is immutable after Insert returns; no lock needed.
 		d := dist(query, epNode.Vector)
 		visited.Set(ep)
-		heap.Push(candidates, Candidate{ep, d})
-		heap.Push(results, Candidate{ep, d})
+		minPush(candidates, Candidate{ep, d})
+		maxPush(results, Candidate{ep, d})
 	}
 
 	for candidates.Len() > 0 {
-		closest := heap.Pop(candidates).(Candidate)
+		closest := minPop(candidates)
 		if results.Len() == ef && closest.Dist > results.Peek().Dist {
 			break
 		}
@@ -45,7 +49,7 @@ func (idx *Index) searchLayer(query []float32, entryPoints []uint32, ef, layer i
 			continue
 		}
 
-		// Hold the RLock for the inner loop. Distance is fast (SIMD), so the
+		// Hold the per-Node RLock for the inner loop. Distance is fast (SIMD), so the
 		// critical section is short; in exchange we don't pay the cost of
 		// copying the neighbors slice on every expansion.
 		cn.mu.RLock()
@@ -65,12 +69,14 @@ func (idx *Index) searchLayer(query []float32, entryPoints []uint32, ef, layer i
 			}
 			d := dist(query, nbr.Vector)
 
-			if results.Len() < ef || d < results.Peek().Dist {
-				heap.Push(candidates, Candidate{nbrID, d})
-				heap.Push(results, Candidate{nbrID, d})
-				if results.Len() > ef {
-					heap.Pop(results)
-				}
+			if results.Len() < ef {
+				minPush(candidates, Candidate{nbrID, d})
+				maxPush(results, Candidate{nbrID, d})
+			} else if d < results.Peek().Dist {
+				minPush(candidates, Candidate{nbrID, d})
+				// Single sift: replace the (worse) current root in one pass
+				// rather than maxPush + maxPop = two passes.
+				maxReplaceTop(results, Candidate{nbrID, d})
 			}
 		}
 		cn.mu.RUnlock()
@@ -78,7 +84,7 @@ func (idx *Index) searchLayer(query []float32, entryPoints []uint32, ef, layer i
 
 	out := make([]Candidate, results.Len())
 	for i := len(out) - 1; i >= 0; i-- {
-		out[i] = heap.Pop(results).(Candidate)
+		out[i] = maxPop(results)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Dist < out[j].Dist })
 	return out

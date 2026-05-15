@@ -83,7 +83,13 @@ func Open(path string) (*WAL, error) {
 	return &WAL{f: f}, nil
 }
 
+// Append is safe to call on a nil receiver — it becomes a no-op. This lets
+// callers run with WAL disabled (e.g. benchmarking) without branching at
+// every call site.
 func (w *WAL) Append(rec *Record) error {
+	if w == nil {
+		return nil
+	}
 	payload, err := marshal(rec)
 	if err != nil {
 		return err
@@ -107,6 +113,9 @@ func (w *WAL) Append(rec *Record) error {
 }
 
 func (w *WAL) Close() error {
+	if w == nil {
+		return nil
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.f.Close()
